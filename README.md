@@ -7,7 +7,7 @@ A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Dat
 1. Push this folder to the repository's default branch, including `.github/workflows/daily_jobs.yml`.
 2. Add the three Actions secrets documented under **Enable daily email** below.
 3. Open **Actions → Daily Job Digest Email → Run workflow** and confirm that the email and workbook arrive.
-4. The workflow then runs automatically at **8:17 AM Pacific every day**, following US DST. GitHub schedule jobs can be delayed and are not hard real-time.
+4. The workflow then runs automatically at **9:00 AM San Francisco time every day**, following US daylight-saving changes. GitHub schedule jobs can be delayed and are not hard real-time.
 
 ## What it does
 
@@ -15,12 +15,12 @@ A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Dat
 - Extracts structured postings (JSON) and postings from Markdown tables; keeps only SWE/SDE, AI/ML, data engineering, data science, plus related technical engineering titles.
 - Defaults to US or location-unknown jobs and ranks Bay Area roles slightly higher. Non-US jobs with an explicit location are generally excluded.
 - **Strong match** = title evidence of early career/new grad with no explicit mismatch; **Review** = plausible but unclear / targeting 2027 / 2 years; **Stretch** = 3–4 YOE; **Eligibility warning** = 5+ YOE or explicit citizenship/no-sponsorship concern. A strong title match does **not** mean you meet all requirements.
-- Separately tags visa status from explicit information or source metadata. `H-1B history only` is **not** a current-role sponsor guarantee. Don't infer sponsorship from a company's name.
+- Uses visa/sponsorship signals internally for hard exclusions. The compact filtered sheet and email do not display a Visa column; raw source values remain available in the unfiltered audit sheet.
 - Skips internships/co-ops requiring enrollment and unrelated functions. Seniority words alone do not exclude a role. Company/role/location dedup is approximate. Always confirm employer job descriptions, graduation window, enrollment, and visa/OPT eligibility.
 - The `Filtered 14 Days` sheet is deduplicated and applies the approved hard exclusions: nontechnical/student roles, explicit non-US locations, no sponsorship or citizenship restrictions, 2+ years required experience, PhD-only roles, active-clearance requirements, and invalid/out-of-window dates. Seniority words alone do not exclude a role.
 - The `All Ingested 28 Days` sheet keeps every valid dated source record from the last 28 days without business filtering or deduplication. It records whether and why each row was excluded from the filtered sheet.
 - Both sheets include source provenance, including a GitHub repository link when the source is hosted on GitHub.
-- Puts filtered jobs posted within the last three days in the email body.
+- Puts filtered jobs posted within the last three days in a compact email table with separate company and job-title columns, posting date, short notes, and a right-aligned Apply button.
 - Attaches `job_digest.xlsx` and also uploads it as a GitHub Actions artifact retained for 14 days.
 
 ## Enable daily email
@@ -29,7 +29,7 @@ This workflow uses Gmail SMTP. In the GitHub repository, open **Settings → Sec
 
 - `SMTP_USER`: the Gmail address that sends the digest.
 - `SMTP_PASSWORD`: a 16-character Google app password, not the normal account password. Google 2-Step Verification must be enabled before creating an app password.
-- `EMAIL_TO`: the recipient email address.
+- `EMAIL_TO`: one recipient email address, or multiple addresses separated by commas.
 
 The workflow only needs read permission to repository contents. After adding the secrets, run it manually once from the **Actions** tab and verify the received email before relying on the daily schedule.
 

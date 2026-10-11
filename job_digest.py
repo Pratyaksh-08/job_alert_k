@@ -422,6 +422,17 @@ def job_family(job):
     return job.get('track') or 'Other technical'
 
 
+def compact_note(job):
+    """Short, scan-friendly context for presentation surfaces."""
+    if job.get('fit') == 'Strong match':
+        return 'Early-career match'
+    if job.get('yoe_detected') == 1:
+        return '1 year mentioned'
+    if job.get('fit') == 'Stretch':
+        return 'Check experience'
+    return 'Check eligibility'
+
+
 def write_workbook(filtered, all_jobs, source_status, cfg, today):
     path=OUT/'job_digest.xlsx'
     temp_handle=tempfile.NamedTemporaryFile(prefix='job_digest_',suffix='.xlsx',delete=False)
@@ -437,7 +448,7 @@ def write_workbook(filtered, all_jobs, source_status, cfg, today):
     body=wb.add_format({'valign':'top'})
     warning=wb.add_format({'bg_color':'#FFF2CC','font_color':'#7F6000'})
 
-    filtered_cols=['Company','Role','Location','Posted Date','Age Days','Date Basis','Date Confidence','Job Family','Seniority','Experience Required','Degree','Sponsorship','Fit','Filter Notes','Application URL','Source','GitHub Source','Source Page','Source Type','Source Record ID','Duplicate Group ID']
+    filtered_cols=['Company','Job Title','Location','Posted Date','Age Days','Date Basis','Date Confidence','Job Family','Seniority','Experience Required','Degree','Fit','Notes','Source','GitHub Source','Source Page','Source Type','Source Record ID','Duplicate Group ID','Apply']
     all_cols=['Source','Source Type','GitHub Source','Source Page','Source Record ID','Company','Role','Location Raw','Posted Raw','Effective Date','Age Days','Date Basis','Date Confidence','Source Updated At','Application URL','Description','Visa Raw','Degree Raw','Track Raw','Seniority','Employment Type','Duplicate Group ID','Duplicate Flag','Collected At','Filter Status','Exclusion Reasons']
 
     def excel_date(value):
@@ -455,16 +466,16 @@ def write_workbook(filtered, all_jobs, source_status, cfg, today):
             vals=[]
             if filtered_sheet:
                 posted=excel_date(row.get('posted'))
-                vals=[row['company'],row['title'],row['location'],posted,(today-date_parse(row['posted'],today)).days if posted else None,row.get('date_basis',''),row.get('date_confidence',''),job_family(row),row.get('seniority',''),row.get('yoe_detected'),row.get('degree',''),row.get('visa_tag',''),row.get('fit',''),row.get('reasons',''),row['url'],row['source'],row.get('github_source',''),row.get('source_url',''),row.get('source_type',''),row.get('source_record_id',''),row.get('id','')]
+                vals=[row['company'],row['title'],row['location'],posted,(today-date_parse(row['posted'],today)).days if posted else None,row.get('date_basis',''),row.get('date_confidence',''),job_family(row),row.get('seniority',''),row.get('yoe_detected'),row.get('degree',''),row.get('fit',''),compact_note(row),row['source'],row.get('github_source',''),row.get('source_url',''),row.get('source_type',''),row.get('source_record_id',''),row.get('id',''),row['url']]
             else:
                 posted=excel_date(row.get('posted'))
                 vals=[row['source'],row.get('source_type',''),row.get('github_source',''),row.get('source_url',''),row.get('source_record_id',''),row['company'],row['title'],row['location'],row.get('posted_raw',''),posted,(today-date_parse(row['posted'],today)).days if posted else None,row.get('date_basis',''),row.get('date_confidence',''),row.get('source_updated_at',''),row['url'],row.get('description',''),row.get('visa',''),row.get('degree',''),row.get('track',''),row.get('seniority',''),row.get('employment_type',''),row.get('id',''),row.get('duplicate_flag',''),today.astimezone(timezone.utc).replace(tzinfo=None),row.get('filter_status',''),row.get('exclusion_reasons','')]
             for c,val in enumerate(vals):
                 fmt=body
                 if isinstance(val,datetime): fmt=datefmt
-                elif cols[c] in ('Application URL','GitHub Source','Source Page') and val:
-                    ws.write_url(r_idx,c,val,linkfmt,string='Open'); continue
-                elif cols[c] in ('Role','Location','Filter Notes','Description','Exclusion Reasons'): fmt=wrap
+                elif cols[c] in ('Application URL','Apply','GitHub Source','Source Page') and val:
+                    ws.write_url(r_idx,c,val,linkfmt,string='Apply' if cols[c]=='Apply' else 'Open'); continue
+                elif cols[c] in ('Role','Job Title','Location','Notes','Description','Exclusion Reasons'): fmt=wrap
                 ws.write(r_idx,c,val,fmt)
         last=start+len(rows)
         if rows:
@@ -474,7 +485,7 @@ def write_workbook(filtered, all_jobs, source_status, cfg, today):
                 status_col=cols.index('Filter Status')
                 ws.conditional_format(start+1,status_col,last,status_col,{'type':'text','criteria':'containing','value':'Excluded','format':warning})
         ws.freeze_panes(start+1,3 if filtered_sheet else 2)
-        widths={'Company':22,'Role':38,'Location':24,'Location Raw':24,'Description':55,'Filter Notes':38,'Exclusion Reasons':38,'Application URL':13,'GitHub Source':13,'Source Page':13,'Source':25,'Posted Raw':23,'Date Basis':22,'Source Record ID':24,'Duplicate Group ID':24}
+        widths={'Company':22,'Role':38,'Job Title':38,'Location':24,'Location Raw':24,'Description':55,'Notes':20,'Exclusion Reasons':38,'Application URL':13,'Apply':11,'GitHub Source':13,'Source Page':13,'Source':25,'Posted Raw':23,'Date Basis':22,'Source Record ID':24,'Duplicate Group ID':24}
         for c,label in enumerate(cols): ws.set_column(c,c,widths.get(label,16))
         ws.set_row(start,28)
         ws.autofilter(start,0,last,len(cols)-1) if not rows else None
@@ -491,25 +502,21 @@ def write_workbook(filtered, all_jobs, source_status, cfg, today):
 def html_report(rows, source_status, cfg, today, all_count):
     visible = rows[:cfg['max_html_jobs']]
     counts = Counter(row['fit'] for row in rows)
-    s = ['<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;line-height:1.55;max-width:950px;margin:auto;padding:16px">',
-         f'<h1 style="margin-bottom:4px">Daily Tech Jobs — {html.escape(today.strftime("%d %b %Y"))}</h1>',
-         f'<p>US-based early-career SWE/SDE, AI/ML, Data Engineering and Data Science • postings from the last {cfg["lookback_days"]} days</p>',
-         f'<p><b>{all_count}</b> discovered roles &nbsp; | &nbsp; <b>{counts["Strong match"]}</b> strong matches &nbsp; | &nbsp; <b>{counts["Review"]}</b> review &nbsp; | &nbsp; <b>{counts["Eligibility warning"]}</b> warnings</p>',
-         '<p style="color:#555;font-size:13px">Eligibility tags are heuristics. Confirm every role and sponsorship detail on the employer posting. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.</p>']
-    for tag, color in [('Strong match','#16703a'),('Review','#9a6500'),('Stretch','#5a5a5a'),('Eligibility warning','#a32929')]:
-        group = [r for r in visible if r['fit']==tag]
-        if not group:
-            continue
-        s.append(f'<h2 style="border-bottom:2px solid {color};padding-bottom:4px">{html.escape(tag)} ({counts[tag]})</h2>')
-        s.append('<table cellpadding="8" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f3f4f6"><th align="left">Role</th><th align="left">Location</th><th align="left">Visa</th><th align="left">Notes</th></tr></thead><tbody>')
-        for r in group:
-            company=html.escape(r['company']); title=html.escape(r['title']);url=html.escape(r['url'],quote=True)
-            s.append(f'<tr style="border-bottom:1px solid #ddd"><td><a href="{url}"><b>{company}</b> — {title}</a><br><span style="color:#737373">{html.escape(r["source"])}</span></td><td>{html.escape(r["location"])}</td><td>{html.escape(r["visa_tag"])}</td><td>{html.escape(r["reasons"])}</td></tr>')
+    s = ['<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:1000px;margin:auto;padding:10px">',
+         f'<h2 style="margin:0 0 4px;color:#17365d">US Early-Career Tech Jobs — {html.escape(today.strftime("%d %b %Y"))}</h2>',
+         f'<p style="margin:0 0 8px;font-size:12px;color:#555"><b>{all_count}</b> openings from the last {cfg["lookback_days"]} days · {counts["Strong match"]} strong · {counts["Review"]} review · Full 14/28-day workbook attached.</p>']
+    if visible:
+        s.append('<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#17365d;color:#fff"><th align="left" style="padding:6px">Company</th><th align="left" style="padding:6px">Job Title</th><th align="left" style="padding:6px">Location</th><th align="left" style="padding:6px;white-space:nowrap">Posted</th><th align="left" style="padding:6px">Notes</th><th align="right" style="padding:6px">Apply</th></tr></thead><tbody>')
+        for r in visible:
+            company=html.escape(r['company']); title=html.escape(r['title']); url=html.escape(r['url'],quote=True)
+            posted=date_parse(r.get('posted'),today)
+            posted_text=posted.strftime('%d %b') if posted else 'Unknown'
+            s.append(f'<tr style="border-bottom:1px solid #e5e7eb"><td style="padding:5px"><b>{company}</b></td><td style="padding:5px">{title}</td><td style="padding:5px">{html.escape(r["location"])}</td><td style="padding:5px;white-space:nowrap">{html.escape(posted_text)}</td><td style="padding:5px">{html.escape(compact_note(r))}</td><td align="right" style="padding:5px"><a href="{url}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:5px 9px;border-radius:4px;font-weight:bold">Apply</a></td></tr>')
         s.append('</tbody></table>')
     if not rows:
         s.append(f'<p>No matching openings with a usable posting date were found in the last {cfg["lookback_days"]} days.</p>')
     if len(rows)>len(visible):
-        s.append(f'<p><b>{len(rows)-len(visible)} more openings</b> are included in the attached Excel workbook.</p>')
+        s.append(f'<p style="font-size:12px"><b>{len(rows)-len(visible)} more openings</b> are in the attached workbook.</p>')
     if cfg.get('show_sources_status'):
         failed=[x for x in source_status if x['error']]
         ok=[x for x in source_status if not x['error']]
@@ -528,11 +535,10 @@ def rows_within_days(rows, today, days):
 def build_mail(rows, sources, cfg, today, sender, recipient, workbook_data):
     recent=rows_within_days(rows,today,3)
     recent_cfg={**cfg,'lookback_days':3}
-    counts=Counter(x['fit'] for x in recent)
     mail=EmailMessage()
     mail['From']=sender
     mail['To']=recipient
-    mail['Subject']=f'[{today.strftime("%d %b")}] {len(recent)} tech roles from the last 3 days | {counts["Strong match"]} strong'
+    mail['Subject']=f'Daily Job Digest | {len(recent)} US tech openings | {today.strftime("%d %b")}'
     mail.set_content('Daily early-career tech jobs digest. The message contains filtered roles from the last three days. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n'+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
     mail.add_alternative(html_report(recent,sources,recent_cfg,today,len(recent)),subtype='html')
     mail.add_attachment(workbook_data,maintype='application',subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename='job_digest.xlsx')

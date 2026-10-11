@@ -2,7 +2,7 @@ name: Daily Job Digest Email
 
 on:
   schedule:
-    - cron: '17 8 * * *'
+    - cron: '0 9 * * *'
       timezone: America/Los_Angeles
   workflow_dispatch:
 

@@ -109,7 +109,14 @@ class DigestTests(unittest.TestCase):
         cfg={'lookback_days':14,'max_html_jobs':125,'show_sources_status':True}
         health=[{'name':'fixture','count':2,'error':''}]
         mail=build_mail([recent,old],health,cfg,now,'sender@example.com','to@example.com',b'xlsx')
-        self.assertIn('1 tech roles from the last 3 days',mail['Subject'])
+        self.assertEqual(mail['Subject'],'Daily Job Digest | 1 US tech openings | 11 Oct')
+        html_body=mail.get_body(preferencelist=('html',)).get_content()
+        self.assertIn('>Company</th>',html_body)
+        self.assertIn('>Job Title</th>',html_body)
+        self.assertIn('>Posted</th>',html_body)
+        self.assertNotIn('>Visa</th>',html_body)
+        self.assertIn('>Apply</a>',html_body)
+        self.assertIn('Early-career match',html_body)
         attachments=list(mail.iter_attachments())
         self.assertEqual(len(attachments),1)
         self.assertEqual(attachments[0].get_filename(),'job_digest.xlsx')
