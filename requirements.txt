@@ -1,1 +1,2 @@
 requests>=2.32,<3
+xlsxwriter>=3.2,<4

@@ -1,20 +1,16 @@
 {
   "sources": [
-    {"name": "ApplyGuy US New Grad", "type": "json", "url": "https://raw.githubusercontent.com/ApplyGuy/2027-New-Grad-Jobs/main/data/new-grad-jobs.json"},
-    {"name": "Ricsign Elite New Grads", "type": "json", "url": "https://raw.githubusercontent.com/ricsign/Ricsign-New-Grads-Jobs-2027/main/data/v1/jobs.json"},
-    {"name": "Visa-Aware New Grad Jobs", "type": "json", "url": "https://raw.githubusercontent.com/python3isfun/new-grad-jobs/main/data/listings.json"},
-    {"name": "WonOfAKind New Grad", "type": "json", "url": "https://raw.githubusercontent.com/WonOfAKind/New-Grad-And-Internships-2027/main/data/roles.json"},
-    {"name": "2027 Tech Jobs", "type": "json", "url": "https://raw.githubusercontent.com/aprameyak/2027-tech-jobs/main/listings.json"},
-    {"name": "SpeedyApply US SWE", "type": "markdown", "url": "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/NEW_GRAD_USA.md"},
-    {"name": "SpeedyApply US AI/ML", "type": "markdown", "url": "https://raw.githubusercontent.com/speedyapply/2027-AI-College-Jobs/main/NEW_GRAD_USA.md"},
-    {"name": "Simplify New Grad", "type": "markdown", "url": "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md"},
-    {"name": "Zapply Data Science", "type": "markdown", "url": "https://raw.githubusercontent.com/zapplyjobs/New-Grad-Data-Science-Jobs-2027/main/README.md"},
-    {"name": "Vansh New Grad", "type": "markdown", "url": "https://raw.githubusercontent.com/vanshb03/New-Grad-2027/main/README.md"},
-    {"name": "Stripe Direct", "type": "greenhouse", "board": "stripe"},
-    {"name": "Databricks Direct", "type": "greenhouse", "board": "databricks"},
-    {"name": "Scale AI Direct", "type": "greenhouse", "board": "scaleai"},
-    {"name": "xAI Direct", "type": "greenhouse", "board": "xai"},
-    {"name": "Cohere Direct", "type": "ashby", "board": "cohere"},
-    {"name": "Mercor Direct", "type": "ashby", "board": "mercor"}
+    {"name": "ApplyGuy US New Grad", "type": "json", "url": "https://raw.githubusercontent.com/ApplyGuy/2027-New-Grad-Jobs/main/data/new-grad-jobs.json", "github_repo": "https://github.com/ApplyGuy/2027-New-Grad-Jobs"},
+    {"name": "Visa-Aware New Grad Jobs", "type": "json", "url": "https://raw.githubusercontent.com/python3isfun/new-grad-jobs/main/data/listings.json", "github_repo": "https://github.com/python3isfun/new-grad-jobs"},
+    {"name": "2027 Tech Jobs", "type": "json", "url": "https://raw.githubusercontent.com/aprameyak/2027-tech-jobs/main/listings.json", "github_repo": "https://github.com/aprameyak/2027-tech-jobs"},
+    {"name": "SpeedyApply US SWE", "type": "markdown", "url": "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/NEW_GRAD_USA.md", "github_repo": "https://github.com/speedyapply/2027-SWE-College-Jobs"},
+    {"name": "SpeedyApply US AI/ML", "type": "markdown", "url": "https://raw.githubusercontent.com/speedyapply/2027-AI-College-Jobs/main/NEW_GRAD_USA.md", "github_repo": "https://github.com/speedyapply/2027-AI-College-Jobs"},
+    {"name": "Simplify New Grad", "type": "markdown", "url": "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md", "github_repo": "https://github.com/SimplifyJobs/New-Grad-Positions"},
+    {"name": "Zapply Data Science", "type": "markdown", "url": "https://raw.githubusercontent.com/zapplyjobs/New-Grad-Data-Science-Jobs-2027/main/README.md", "github_repo": "https://github.com/zapplyjobs/New-Grad-Data-Science-Jobs-2027"},
+    {"name": "Vansh New Grad", "type": "markdown", "url": "https://raw.githubusercontent.com/vanshb03/New-Grad-2027/main/README.md", "github_repo": "https://github.com/vanshb03/New-Grad-2027"},
+    {"name": "Stripe Official ATS", "type": "greenhouse", "board": "stripe", "source_page": "https://stripe.com/jobs/search"},
+    {"name": "xAI Official ATS", "type": "greenhouse", "board": "xai", "source_page": "https://x.ai/careers"},
+    {"name": "Cohere Official ATS", "type": "ashby", "board": "cohere", "source_page": "https://cohere.com/careers"},
+    {"name": "Mercor Official ATS", "type": "ashby", "board": "mercor", "source_page": "https://mercor.com/careers"}
   ]
 }

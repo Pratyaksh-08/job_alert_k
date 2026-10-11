@@ -11,6 +11,8 @@ import json
 import os
 import re
 import smtplib
+import shutil
+import tempfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -19,14 +21,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 import requests
+import xlsxwriter
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / 'config'
-STATE = ROOT / 'state' / 'seen.json'
 OUT = ROOT / 'out'
 HEADERS = {'User-Agent': 'NewGradDailyDigest/1.0 (personal noncommercial job discovery)'}
 TECH = re.compile(r'(?i)(software|\bswe\b|\bsde\b|backend|back.end|front.end|full.stack|developer|programmer|\bAI\b|machine learning|\bML\b|deep learning|data engineer|data scientist|applied scien|research engineer|data platform|data infrastructure|analytics engineer|devops engineer|site reliability|\bSRE\b|cloud engineer|platform engineer|inference engineer)')
-BAD_TITLES = re.compile(r'(?i)\b(intern(ship)?|co.op|working student|apprentice|senior|staff|principal|director|manager|head of|vice president|vp|tech support|customer support|product designer|sales|finance|hr|recruiter)\b')
+BAD_TITLES = re.compile(r'(?i)\b(intern(ship)?|co.op|working student|apprentice|tech support|customer support|product designer|sales|finance|hr|recruiter|legal counsel|account executive)\b')
 US_HINT = re.compile(r'(?i)\b(USA|U\.S\.|United States|America|Remote|California|New York|Seattle|Boston|Austin|Chicago|Atlanta|Dallas|Portland|Denver|Miami|Raleigh|Palo Alto|Sunnyvale|San Francisco|San Jose|Santa Clara|Mountain View|Redwood City|Menlo Park|San Mateo|Cupertino|Fremont|Bellevue|Redmond|Arlington|Washington|Houston|Detroit|Philadelphia|Los Angeles|San Diego|Bay Area)\b')
 STATE_CODES = re.compile(r'(?i)(?:,|\s)(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)(?:\s|$|,|\/)')
 NON_US = re.compile(r'(?i)\b(India|Canada|United Kingdom|UK|London|Dublin|Ireland|Berlin|Germany|Singapore|Australia|Tokyo|Japan|Netherlands|France|China|Taiwan|Israel|Poland|Spain|Switzerland|Hong Kong)\b')
@@ -83,7 +85,18 @@ def date_parse(value, today=None):
         parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
         return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
     except ValueError:
-        return None
+        pass
+    # Some community tables publish month/day without a year. Infer the most
+    # recent non-future occurrence and retain the inference in date_basis.
+    for fmt in ('%b %d', '%B %d'):
+        try:
+            parsed = datetime.strptime(value, fmt).replace(year=today.year, tzinfo=timezone.utc)
+            if parsed > today + timedelta(days=1):
+                parsed = parsed.replace(year=today.year - 1)
+            return parsed
+        except ValueError:
+            continue
+    return None
 
 
 def canonical_url(link):
@@ -177,12 +190,20 @@ def normalize(raw, source, source_type):
     description = text_only(first(raw,'descriptionPlain','content','description','descriptionHtml','descriptionBody','text','summary'))[:9000]
     if raw.get('active') is False or raw.get('isListed') is False or raw.get('closed_at'):
         return None
+    posted_raw=first(raw,'posted_at','posted','published_at','created_at','publishedAt','first_seen','date_added','date_seen','updated_at','age')
     return {
         'company':company, 'title':title, 'location':location or 'Location not stated',
         'url':url, 'source':source, 'description':description,
-        'posted':first(raw,'posted_at','posted','published_at','created_at','publishedAt','first_seen','updated_at','age'),
+        'posted':posted_raw, 'posted_raw':str(posted_raw or ''),
+        'source_updated_at':str(first(raw,'source_updated_at','updated_at','last_seen','last_verified') or ''),
+        'source_record_id':str(first(raw,'job_id','uid','role_id','source_id','id','internal_job_id','requisition_id') or ''),
+        'date_basis':str(raw.get('_date_basis') or 'source_reported_posted'),
+        'date_confidence':str(raw.get('_date_confidence') or 'exact'),
         'visa':str(first(raw,'sponsorship','visa','visa_status') or ''),
-        'degree':str(raw.get('degree') or ''), 'track':str(raw.get('track') or ''),
+        'degree':str(first(raw,'degree','education') or ''),
+        'track':string_location(first(raw,'track','roles','discipline','disciplines','department','team')),
+        'seniority':str(raw.get('seniority') or ''),
+        'employment_type':str(first(raw,'employmentType','role_type','type') or ''),
     }
 
 
@@ -200,16 +221,62 @@ def source_items(session, item):
         url = item['url']
     resp = session.get(url, timeout=(8,40), headers=HEADERS)
     resp.raise_for_status()
+    def decorate(rows):
+        for row in rows:
+            row['source_type']=typ
+            row['source_url']=item.get('source_page') or item.get('url') or url
+            row['github_source']=item.get('github_repo','')
+        return rows
     if typ == 'markdown':
-        return [x for x in (normalize(row,item['name'],typ) for row in parse_markdown(resp.text)) if x]
+        basis='month_day_inferred' if item['name'].startswith('Vansh') else 'relative_age_derived'
+        confidence='inferred' if basis == 'month_day_inferred' else 'derived'
+        parsed=[]
+        for row in parse_markdown(resp.text):
+            row['_date_basis']=basis; row['_date_confidence']=confidence
+            normalized=normalize(row,item['name'],typ)
+            if normalized: parsed.append(normalized)
+        return decorate(parsed)
     data = resp.json()
+    if typ == 'ypatodkar':
+        companies=data.get('companies',[]); fields=data.get('companyFields',[]); parsed=[]
+        for job in data.get('jobs',[]):
+            company=companies[job.get('c',-1)] if isinstance(job.get('c'),int) and 0 <= job.get('c') < len(companies) else {}
+            raw={**job,'company':company.get('n',''),'location':job.get('locations') or job.get('city',''),
+                 '_date_basis':'employer_published','_date_confidence':'exact','id':job.get('job_id','')}
+            normalized=normalize(raw,item['name'],typ)
+            if normalized: parsed.append(normalized)
+        return decorate(parsed)
     if typ == 'greenhouse':
-        return [x for x in (normalize({**job,'company':item['name'].replace(' Direct',''),'url':job.get('absolute_url')},item['name'],typ) for job in data.get('jobs',[])) if x]
+        company=item['name'].replace(' Official ATS','')
+        rows=[]
+        for job in data.get('jobs',[]):
+            raw={**job,'company':company,'url':job.get('absolute_url'),'posted':job.get('first_published'),
+                 'source_updated_at':job.get('updated_at'),'_date_basis':'employer_published','_date_confidence':'exact'}
+            normalized=normalize(raw,item['name'],typ)
+            if normalized: rows.append(normalized)
+        return decorate(rows)
     if typ == 'ashby':
-        return [x for x in (normalize({**job,'company':item['name'].replace(' Direct',''),'url':job.get('jobUrl') or job.get('applyUrl')},item['name'],typ) for job in data.get('jobs',[])) if x]
+        company=item['name'].replace(' Official ATS','')
+        rows=[]
+        for job in data.get('jobs',[]):
+            raw={**job,'company':company,'url':job.get('jobUrl') or job.get('applyUrl'),
+                 '_date_basis':'employer_published','_date_confidence':'exact'}
+            normalized=normalize(raw,item['name'],typ)
+            if normalized: rows.append(normalized)
+        return decorate(rows)
     if typ == 'lever':
-        return [x for x in (normalize({**job,'company':item['name'].replace(' Direct',''),'url':job.get('hostedUrl')},item['name'],typ) for job in data) if x]
-    return [x for x in (normalize(row,item['name'],typ) for row in iter_records(data)) if x]
+        return decorate([x for x in (normalize({**job,'company':item['name'].replace(' Official ATS',''),'url':job.get('hostedUrl')},item['name'],typ) for job in data) if x])
+    rows=[]
+    for raw in iter_records(data):
+        if item['name'].startswith('Visa-Aware') and not raw.get('posted'):
+            raw={**raw,'_date_basis':'source_first_seen','_date_confidence':'discovery_only'}
+        elif item['name'].startswith('2027 Tech'):
+            raw={**raw,'_date_basis':'source_date_added','_date_confidence':'discovery_only'}
+        else:
+            raw={**raw,'_date_basis':'source_reported_posted','_date_confidence':'exact'}
+        normalized=normalize(raw,item['name'],typ)
+        if normalized: rows.append(normalized)
+    return decorate(rows)
 
 
 def in_us(location):
@@ -232,13 +299,13 @@ def job_key(j):
     return hashlib.sha256(f'{company}|{title}|{loc}'.encode('utf-8')).hexdigest()[:24]
 
 
-def classify(job, graduate_year=2026):
+def classify(job):
     title, desc = job['title'], job['description']
     full = f'{title} {desc[:8000]}'
     visa_code = job['visa'].lower().replace('_','-')
-    if visa_code in ('no-sponsorship','no sponsorship','no','does not sponsor') or re.search(r'(?i)(no visa sponsorship|unable to sponsor|do not sponsor|cannot sponsor)',full):
+    if visa_code in ('no-sponsorship','no sponsorship','no','does not sponsor') or re.search(r'(?i)(no visa sponsorship|unable to sponsor|do not sponsor|cannot sponsor|without (?:current or future )?(?:visa )?sponsorship|will not (?:provide|offer) sponsorship)',full):
         visa = 'No sponsorship'
-    elif visa_code in ('citizenship','us-citizenship','citizenship-required') or re.search(r'(?i)(u\.s\. citizenship required|must be a u\.s\. citizen|us citizens only)',full):
+    elif visa_code in ('citizenship','us-citizenship','citizenship-required') or re.search(r'(?i)(u\.s\. citizenship required|must be a u\.s\. citizen|us citizens only|u\.s\. persons? only|must be (?:a )?(?:u\.s\. )?permanent resident|green card holders? only)',full):
         visa = 'US citizenship required'
     elif visa_code in ('sponsors','sponsorship available','yes') or re.search(r'(?i)(visa sponsorship (is |will be )?available|we (do )?offer (visa )?sponsorship)',full):
         visa = 'Sponsorship stated'
@@ -254,10 +321,7 @@ def classify(job, graduate_year=2026):
         if y <= 20:
             exp_values.append(y)
     yoe = max(exp_values) if exp_values else None
-    grad_years = {int(n) for n in re.findall(r'(?<!\d)20(2[4-9])(?!\d)',title)}
-    # The capture group contains 24,25,...29; convert to 2024,...2029.
-    grad_years = {2000+y for y in grad_years}
-    early = bool(re.search(r'(?i)(new.grad|new graduate|university grad|college grad|early career|entry.level|associate software|engineer i\b|engineer 1\b|2026 grad|\bAMTS\b|graduate program)', title))
+    early = bool(re.search(r'(?i)(new.grad|new graduate|university grad|college grad|early career|entry.level|associate software|engineer i\b|engineer 1\b|20(?:2[4-9]) grad|\bAMTS\b|graduate program)', title))
     reason = []
     if visa in ('No sponsorship','US citizenship required'):
         reason.append(visa)
@@ -265,26 +329,20 @@ def classify(job, graduate_year=2026):
         reason.append('Requires current enrollment')
     if yoe is not None and yoe >= 3:
         reason.append(f'{yoe}+ YOE mentioned (check requirements)')
-    if grad_years and graduate_year not in grad_years:
-        reason.append(f'Title targets {", ".join(map(str,sorted(grad_years)))} graduates')
     # Only a clear title-level mismatch or explicit visa restriction is an eligibility warning.
     if any(x in visa for x in ('No sponsorship','US citizenship')) or (yoe is not None and yoe >= 5) or 'Requires current enrollment' in reason:
         fit = 'Eligibility warning'
     elif yoe is not None and yoe >= 3:
         fit = 'Stretch'
-    elif grad_years and graduate_year not in grad_years:
-        fit = 'Review'
     elif (yoe is not None and yoe == 2):
         fit = 'Review'
-    elif early or graduate_year in grad_years:
+    elif early:
         fit = 'Strong match'
     else:
         fit = 'Review'
         reason.append('Graduate eligibility and required experience unclear')
     # Generic "junior" roles count as review unless eligibility known.
     score = {'Strong match':100,'Review':65,'Stretch':35,'Eligibility warning':20}[fit]
-    if graduate_year in grad_years:
-        score += 18
     if BAY.search(job['location']):
         score += 8
     if job['company'].strip().lower() in COMPANY_TIER:
@@ -302,10 +360,44 @@ def eligible(job, cfg, today):
         return False
     if cfg['location'] == 'US' and not in_us(job['location']):
         return False
-    date = date_parse(job.get('posted'),today)
-    if date and date < today-timedelta(days=cfg['max_post_age_days']):
+    date = date_parse(job.get('posted'), today)
+    # A rolling lookback artifact must have a usable posting date. Undated jobs
+    # cannot be proven to belong to the requested window.
+    if not date:
+        return False
+    if date < today-timedelta(days=cfg['lookback_days']):
+        return False
+    if date > today+timedelta(days=1):
         return False
     return True
+
+
+def exclusion_reasons(job, cfg, today):
+    """Return only approved hard-exclusion reasons for the filtered sheet."""
+    reasons=[]
+    published=date_parse(job.get('posted'),today)
+    if not published:
+        reasons.append('Posting date unavailable')
+    elif published < today-timedelta(days=cfg['lookback_days']):
+        reasons.append(f'Older than {cfg["lookback_days"]} days')
+    elif published > today+timedelta(days=1):
+        reasons.append('Posting date is in the future')
+    if not TECH.search(job['title']):
+        reasons.append('Outside selected technical job families')
+    if BAD_TITLES.search(job['title']):
+        reasons.append('Internship/student or irrelevant function')
+    if cfg['location']=='US' and not in_us(job['location']):
+        reasons.append('Explicitly outside the US')
+    if job.get('visa_tag') in ('No sponsorship','US citizenship required'):
+        reasons.append(job['visa_tag'])
+    if (job.get('yoe_detected') or 0) >= 2:
+        reasons.append(f'{job["yoe_detected"]}+ years experience required')
+    full=f'{job["title"]} {job.get("description","")}'
+    if re.search(r'(?i)\b(ph\.?d|doctorate)\b',job['title']) or re.search(r'(?i)(ph\.?d|doctorate)\s+(?:is\s+)?required',full):
+        reasons.append('PhD/doctorate required')
+    if re.search(r'(?i)(active (?:top secret|secret) clearance|required security clearance|must possess.{0,30}clearance)',full):
+        reasons.append('Active security clearance required')
+    return list(dict.fromkeys(reasons))
 
 
 def csv_bytes(rows):
@@ -317,14 +409,93 @@ def csv_bytes(rows):
     return target.getvalue().encode('utf-8-sig')
 
 
+def job_family(job):
+    title=job['title']
+    for label,pattern in (
+        ('AI/ML',r'(?i)(artificial intelligence|machine learning|deep learning|\bAI\b|\bML\b|inference)'),
+        ('Data',r'(?i)(data engineer|data scientist|analytics engineer|data platform)'),
+        ('Infrastructure',r'(?i)(devops|site reliability|\bSRE\b|cloud|platform|infrastructure)'),
+        ('Software Engineering',r'(?i)(software|\bswe\b|\bsde\b|developer|backend|front.end|full.stack|programmer)'),
+        ('Research',r'(?i)(research engineer|applied scien)'),
+    ):
+        if re.search(pattern,title): return label
+    return job.get('track') or 'Other technical'
+
+
+def write_workbook(filtered, all_jobs, source_status, cfg, today):
+    path=OUT/'job_digest.xlsx'
+    temp_handle=tempfile.NamedTemporaryFile(prefix='job_digest_',suffix='.xlsx',delete=False)
+    temp_path=Path(temp_handle.name); temp_handle.close()
+    wb=xlsxwriter.Workbook(temp_path)
+    wb.set_properties({'title':'US Early-Career Job Digest','subject':'Filtered 14-day jobs and all ingested jobs from the last 28 days'})
+    header=wb.add_format({'bold':True,'font_color':'#FFFFFF','bg_color':'#17365D','align':'center','valign':'vcenter','border':0})
+    title=wb.add_format({'bold':True,'font_size':14,'font_color':'#17365D'})
+    note=wb.add_format({'italic':True,'font_color':'#595959'})
+    datefmt=wb.add_format({'num_format':'mm/dd/yy','align':'right'})
+    linkfmt=wb.add_format({'font_color':'#0563C1','underline':True})
+    wrap=wb.add_format({'text_wrap':True,'valign':'top'})
+    body=wb.add_format({'valign':'top'})
+    warning=wb.add_format({'bg_color':'#FFF2CC','font_color':'#7F6000'})
+
+    filtered_cols=['Company','Role','Location','Posted Date','Age Days','Date Basis','Date Confidence','Job Family','Seniority','Experience Required','Degree','Sponsorship','Fit','Filter Notes','Application URL','Source','GitHub Source','Source Page','Source Type','Source Record ID','Duplicate Group ID']
+    all_cols=['Source','Source Type','GitHub Source','Source Page','Source Record ID','Company','Role','Location Raw','Posted Raw','Effective Date','Age Days','Date Basis','Date Confidence','Source Updated At','Application URL','Description','Visa Raw','Degree Raw','Track Raw','Seniority','Employment Type','Duplicate Group ID','Duplicate Flag','Collected At','Filter Status','Exclusion Reasons']
+
+    def excel_date(value):
+        parsed=date_parse(value,today)
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed else None
+    def add_sheet(name,cols,rows,filtered_sheet):
+        ws=wb.add_worksheet(name); ws.hide_gridlines(2); ws.set_tab_color('#17365D' if filtered_sheet else '#5B9BD5')
+        ws.write(1,0,name,title)
+        scope=(f'{len(rows):,} deduplicated jobs after approved hard exclusions; rolling {cfg["lookback_days"]}-day window.' if filtered_sheet
+               else f'{len(rows):,} valid source records; no business filters or deduplication; rolling {cfg["all_jobs_lookback_days"]}-day window.')
+        ws.write(2,0,scope,note)
+        start=4
+        for c,label in enumerate(cols): ws.write(start,c,label,header)
+        for r_idx,row in enumerate(rows,start+1):
+            vals=[]
+            if filtered_sheet:
+                posted=excel_date(row.get('posted'))
+                vals=[row['company'],row['title'],row['location'],posted,(today-date_parse(row['posted'],today)).days if posted else None,row.get('date_basis',''),row.get('date_confidence',''),job_family(row),row.get('seniority',''),row.get('yoe_detected'),row.get('degree',''),row.get('visa_tag',''),row.get('fit',''),row.get('reasons',''),row['url'],row['source'],row.get('github_source',''),row.get('source_url',''),row.get('source_type',''),row.get('source_record_id',''),row.get('id','')]
+            else:
+                posted=excel_date(row.get('posted'))
+                vals=[row['source'],row.get('source_type',''),row.get('github_source',''),row.get('source_url',''),row.get('source_record_id',''),row['company'],row['title'],row['location'],row.get('posted_raw',''),posted,(today-date_parse(row['posted'],today)).days if posted else None,row.get('date_basis',''),row.get('date_confidence',''),row.get('source_updated_at',''),row['url'],row.get('description',''),row.get('visa',''),row.get('degree',''),row.get('track',''),row.get('seniority',''),row.get('employment_type',''),row.get('id',''),row.get('duplicate_flag',''),today.astimezone(timezone.utc).replace(tzinfo=None),row.get('filter_status',''),row.get('exclusion_reasons','')]
+            for c,val in enumerate(vals):
+                fmt=body
+                if isinstance(val,datetime): fmt=datefmt
+                elif cols[c] in ('Application URL','GitHub Source','Source Page') and val:
+                    ws.write_url(r_idx,c,val,linkfmt,string='Open'); continue
+                elif cols[c] in ('Role','Location','Filter Notes','Description','Exclusion Reasons'): fmt=wrap
+                ws.write(r_idx,c,val,fmt)
+        last=start+len(rows)
+        if rows:
+            table_name='FilteredJobsTable' if filtered_sheet else 'AllIngestedJobsTable'
+            ws.add_table(start,0,last,len(cols)-1,{'name':table_name,'columns':[{'header':x} for x in cols],'style':'Table Style Medium 2'})
+            if not filtered_sheet:
+                status_col=cols.index('Filter Status')
+                ws.conditional_format(start+1,status_col,last,status_col,{'type':'text','criteria':'containing','value':'Excluded','format':warning})
+        ws.freeze_panes(start+1,3 if filtered_sheet else 2)
+        widths={'Company':22,'Role':38,'Location':24,'Location Raw':24,'Description':55,'Filter Notes':38,'Exclusion Reasons':38,'Application URL':13,'GitHub Source':13,'Source Page':13,'Source':25,'Posted Raw':23,'Date Basis':22,'Source Record ID':24,'Duplicate Group ID':24}
+        for c,label in enumerate(cols): ws.set_column(c,c,widths.get(label,16))
+        ws.set_row(start,28)
+        ws.autofilter(start,0,last,len(cols)-1) if not rows else None
+    add_sheet('Filtered 14 Days',filtered_cols,filtered,True)
+    add_sheet('All Ingested 28 Days',all_cols,all_jobs,False)
+    try:
+        wb.close()
+        shutil.copyfile(temp_path,path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return path
+
+
 def html_report(rows, source_status, cfg, today, all_count):
     visible = rows[:cfg['max_html_jobs']]
     counts = Counter(row['fit'] for row in rows)
     s = ['<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;line-height:1.55;max-width:950px;margin:auto;padding:16px">',
          f'<h1 style="margin-bottom:4px">Daily Tech Jobs — {html.escape(today.strftime("%d %b %Y"))}</h1>',
-         f'<p>US-based SWE/SDE, AI/ML, Data Engineering and Data Science • Santa Clara University MSCS 2026</p>',
-         f'<p><b>{all_count}</b> new discovered roles &nbsp; | &nbsp; <b>{counts["Strong match"]}</b> strong matches &nbsp; | &nbsp; <b>{counts["Review"]}</b> review &nbsp; | &nbsp; <b>{counts["Eligibility warning"]}</b> warnings</p>',
-         '<p style="color:#555;font-size:13px">“New” means newly seen by your digest, not necessarily posted today. Eligibility tags are heuristics. Confirm every role and sponsorship detail on the employer posting. CSV attachment contains every new candidate.</p>']
+         f'<p>US-based early-career SWE/SDE, AI/ML, Data Engineering and Data Science • postings from the last {cfg["lookback_days"]} days</p>',
+         f'<p><b>{all_count}</b> discovered roles &nbsp; | &nbsp; <b>{counts["Strong match"]}</b> strong matches &nbsp; | &nbsp; <b>{counts["Review"]}</b> review &nbsp; | &nbsp; <b>{counts["Eligibility warning"]}</b> warnings</p>',
+         '<p style="color:#555;font-size:13px">Eligibility tags are heuristics. Confirm every role and sponsorship detail on the employer posting. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.</p>']
     for tag, color in [('Strong match','#16703a'),('Review','#9a6500'),('Stretch','#5a5a5a'),('Eligibility warning','#a32929')]:
         group = [r for r in visible if r['fit']==tag]
         if not group:
@@ -336,9 +507,9 @@ def html_report(rows, source_status, cfg, today, all_count):
             s.append(f'<tr style="border-bottom:1px solid #ddd"><td><a href="{url}"><b>{company}</b> — {title}</a><br><span style="color:#737373">{html.escape(r["source"])}</span></td><td>{html.escape(r["location"])}</td><td>{html.escape(r["visa_tag"])}</td><td>{html.escape(r["reasons"])}</td></tr>')
         s.append('</tbody></table>')
     if not rows:
-        s.append('<p>No newly discovered matching openings today. Previous openings have not been repeated.</p>')
+        s.append(f'<p>No matching openings with a usable posting date were found in the last {cfg["lookback_days"]} days.</p>')
     if len(rows)>len(visible):
-        s.append(f'<p><b>{len(rows)-len(visible)} more openings</b> are included in the attached CSV.</p>')
+        s.append(f'<p><b>{len(rows)-len(visible)} more openings</b> are included in the attached Excel workbook.</p>')
     if cfg.get('show_sources_status'):
         failed=[x for x in source_status if x['error']]
         ok=[x for x in source_status if not x['error']]
@@ -349,29 +520,39 @@ def html_report(rows, source_status, cfg, today, all_count):
     return ''.join(s)
 
 
-def send_mail(rows, csv_data, sources, cfg, today, all_count):
-    sender,password,recipient=(os.getenv('SMTP_USER',''),os.getenv('SMTP_PASSWORD',''),os.getenv('EMAIL_TO',''))
-    if not sender or not password or not recipient:
-        raise RuntimeError('SMTP_USER, SMTP_PASSWORD and EMAIL_TO must all be defined as GitHub Actions secrets.')
-    counts=Counter(x['fit'] for x in rows)
+def rows_within_days(rows, today, days):
+    cutoff=today-timedelta(days=days)
+    return [row for row in rows if (date_parse(row.get('posted'),today) or datetime(1970,1,1,tzinfo=timezone.utc)) >= cutoff]
+
+
+def build_mail(rows, sources, cfg, today, sender, recipient, workbook_data):
+    recent=rows_within_days(rows,today,3)
+    recent_cfg={**cfg,'lookback_days':3}
+    counts=Counter(x['fit'] for x in recent)
     mail=EmailMessage()
     mail['From']=sender
     mail['To']=recipient
-    mail['Subject']=f'[{today.strftime("%d %b")}] {len(rows)} new tech roles | {counts["Strong match"]} strong | {counts["Review"]} review'
-    mail.set_content('Daily new grad jobs digest. Open the HTML version for categorised, clickable jobs. All results are attached as CSV.\n\n'+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in rows[:30]))
-    mail.add_alternative(html_report(rows,sources,cfg,today,all_count),subtype='html')
-    mail.add_attachment(csv_data,maintype='text',subtype='csv',filename='new_tech_jobs.csv')
+    mail['Subject']=f'[{today.strftime("%d %b")}] {len(recent)} tech roles from the last 3 days | {counts["Strong match"]} strong'
+    mail.set_content('Daily early-career tech jobs digest. The message contains filtered roles from the last three days. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n'+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
+    mail.add_alternative(html_report(recent,sources,recent_cfg,today,len(recent)),subtype='html')
+    mail.add_attachment(workbook_data,maintype='application',subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename='job_digest.xlsx')
+    return mail
+
+
+def send_mail(rows, sources, cfg, today):
+    sender,password,recipient=(os.getenv('SMTP_USER',''),os.getenv('SMTP_PASSWORD',''),os.getenv('EMAIL_TO',''))
+    if not sender or not password or not recipient:
+        raise RuntimeError('SMTP_USER, SMTP_PASSWORD and EMAIL_TO must all be defined as GitHub Actions secrets.')
+    mail=build_mail(rows,sources,cfg,today,sender,recipient,(OUT/'job_digest.xlsx').read_bytes())
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=25) as smtp:
         smtp.login(sender,password)
         smtp.send_message(mail)
 
 
-def run(dry_run=False):
+def run(send_email=False):
     cfg=json.loads((CONFIG/'settings.json').read_text())
     sources=json.loads((CONFIG/'sources.json').read_text())['sources']
     now=datetime.now(timezone.utc)
-    had_state=STATE.exists() and STATE.read_text().strip() not in ('','{}')
-    seen=json.loads(STATE.read_text()) if STATE.exists() else {}
     fetched=[]; health=[]
     session=requests.Session()
     for entry in sources:
@@ -385,63 +566,52 @@ def run(dry_run=False):
             print(f'[warning] {entry["name"]}: {type(exc).__name__}: {str(exc)[:130]}')
     if not any(not item['error'] for item in health):
         raise RuntimeError('Every source failed; declining to send a misleading empty report.')
-    selected={}
+    all_jobs=[]
     for job in fetched:
-        if not eligible(job,cfg,now):
+        published=date_parse(job.get('posted'),now)
+        if not published or published < now-timedelta(days=cfg['all_jobs_lookback_days']) or published > now+timedelta(days=1):
             continue
-        j=classify(job,cfg['graduate_year'])
-        if (j.get('yoe_detected') or 0) >= cfg['max_very_senior_yoe']:
+        j=classify(job)
+        j['id']=job_key(j)
+        reasons=exclusion_reasons(j,cfg,now)
+        j['exclusion_reasons']=' | '.join(reasons)
+        j['filter_status']='Excluded' if reasons else 'Included'
+        all_jobs.append(j)
+    duplicate_counts=Counter(j['id'] for j in all_jobs)
+    for j in all_jobs:
+        j['duplicate_flag']='Yes' if duplicate_counts[j['id']]>1 else 'No'
+    all_jobs.sort(key=lambda j:date_parse(j['posted'],now) or datetime(1970,1,1,tzinfo=timezone.utc),reverse=True)
+
+    selected={}
+    for j in all_jobs:
+        if j['filter_status']=='Excluded':
             continue
-        key=job_key(j)
-        j['id']=key
+        key=j['id']
         existing=selected.get(key)
-        # Prefer job with informative description, explicit sponsorship info, and canonical employer link.
+        # Prefer descriptions and explicit sponsorship evidence when the same job
+        # appears in several community feeds.
         quality=len(j['description']) + (200 if j['visa_tag'] not in ('Sponsorship unknown','H-1B history only') else 0)
         if not existing or quality>existing['_quality']:
             j['_quality']=quality
             selected[key]=j
     candidates=list(selected.values())
     candidates.sort(key=lambda j:(j['score'],date_parse(j['posted'],now) or datetime(1970,1,1,tzinfo=timezone.utc)),reverse=True)
-    output=[]; undated=0
-    for j in candidates:
-        key=j['id']
-        if key in seen:
-            continue
-        published=date_parse(j['posted'],now)
-        if not had_state:
-            if published and published < now-timedelta(days=cfg['first_run_lookback_days']):
-                continue
-            if not published:
-                if undated >= cfg['first_run_undated_limit']:
-                    continue
-                undated += 1
-        output.append(j)
-    # Initial run records all currently discovered jobs so earlier postings don't return as "new" tomorrow.
-    todaystamp=now.isoformat(timespec='seconds')
-    new_seen=dict(seen)
-    for key in selected:
-        if key not in new_seen:
-            new_seen[key]=todaystamp
-    # Prune very old state entries; a moved/reopened job will be rediscovered later.
-    cutoff=now-timedelta(days=400)
-    new_seen={k:v for k,v in new_seen.items() if (date_parse(v,now) or now)>=cutoff}
+    output=candidates
     OUT.mkdir(parents=True,exist_ok=True)
     csv_data=csv_bytes(output)
     (OUT/'jobs.csv').write_bytes(csv_data)
     (OUT/'digest.html').write_text(html_report(output,health,cfg,now,len(output)),encoding='utf-8')
     (OUT/'sources_health.json').write_text(json.dumps(health,indent=2),encoding='utf-8')
-    print(f'Candidates={len(candidates)} new={len(output)} strong={sum(j["fit"]=="Strong match" for j in output)}')
-    if not dry_run and (output or cfg['always_email_even_when_zero_new']):
-        send_mail(output,csv_data,health,cfg,now,len(output))
+    write_workbook(output,all_jobs,health,cfg,now)
+    print(f'Filtered 14-day roles={len(output)} all ingested 28-day rows={len(all_jobs)} strong={sum(j["fit"]=="Strong match" for j in output)}')
+    if send_email:
+        send_mail(output,health,cfg,now)
         print('Email sent successfully.')
-    if not dry_run:
-        STATE.parent.mkdir(parents=True,exist_ok=True)
-        STATE.write_text(json.dumps(new_seen,indent=2,sort_keys=True)+'\n',encoding='utf-8')
     return output
 
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('--dry-run',action='store_true',help='Generate reports without sending email or altering state')
+    parser.add_argument('--send-email', action='store_true', help='Send the generated artifact by email (disabled by default)')
     args=parser.parse_args()
-    run(dry_run=args.dry_run)
+    run(send_email=args.send_email)
