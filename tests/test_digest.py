@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from job_digest import normalize, parse_markdown, classify, job_key, eligible, exclusion_reasons, rows_within_days, rows_from_previous_day, sort_by_posted, build_mail, date_parse, iter_records, csv_bytes, html_report, company_priority
+from job_digest import normalize, parse_markdown, classify, job_key, eligible, exclusion_reasons, rows_within_days, rows_from_previous_days, sort_by_posted, build_mail, date_parse, iter_records, csv_bytes, html_report, company_priority
 
 class DigestTests(unittest.TestCase):
     def j(self,**kwargs):
@@ -109,13 +109,14 @@ class DigestTests(unittest.TestCase):
         tomorrow=self.j(); tomorrow['posted']='2026-10-12T00:01:00Z'
         self.assertEqual(rows_within_days([third_day,fourth_day,tomorrow],now,3),[third_day])
 
-    def test_email_uses_previous_calendar_day_only(self):
+    def test_email_uses_previous_three_complete_days(self):
         now=datetime(2026,10,11,15,tzinfo=timezone.utc)
         today=self.j(); today['posted']='2026-10-11T01:00:00Z'
-        yesterday_early=self.j(); yesterday_early['posted']='2026-10-10T00:01:00Z'
-        yesterday_late=self.j(); yesterday_late['posted']='2026-10-10T23:59:00Z'
-        older=self.j(); older['posted']='2026-10-09T23:59:00Z'
-        self.assertEqual(rows_from_previous_day([today,yesterday_early,yesterday_late,older],now),[yesterday_early,yesterday_late])
+        tenth=self.j(); tenth['posted']='2026-10-10T00:01:00Z'
+        ninth=self.j(); ninth['posted']='2026-10-09T23:59:00Z'
+        eighth=self.j(); eighth['posted']='2026-10-08T00:01:00Z'
+        seventh=self.j(); seventh['posted']='2026-10-07T23:59:00Z'
+        self.assertEqual(rows_from_previous_days([today,tenth,ninth,eighth,seventh],now),[tenth,ninth,eighth])
 
     def test_mail_contains_three_day_body_and_workbook(self):
         now=datetime(2026,10,11,12,tzinfo=timezone.utc)
@@ -132,7 +133,8 @@ class DigestTests(unittest.TestCase):
         self.assertNotIn('>Visa</th>',html_body)
         self.assertIn('>Apply</a>',html_body)
         self.assertIn('Early-career match',html_body)
-        self.assertIn('the previous calendar day',html_body)
+        self.assertIn('the previous 3 complete calendar days',html_body)
+        self.assertIn('Other Companies',html_body)
         self.assertEqual(html_body.count('align="center"'),6)
         attachments=list(mail.iter_attachments())
         self.assertEqual(len(attachments),1)
@@ -143,6 +145,15 @@ class DigestTests(unittest.TestCase):
         older=self.j(); older['company']='Older Co'; older['posted']='2d'; older=classify(older)
         newest=self.j(); newest['company']='Newest Co'; newest['posted']='1h'; newest=classify(newest)
         self.assertEqual(sort_by_posted([older,newest],now),[newest,older])
+
+    def test_html_does_not_truncate_three_day_rows(self):
+        now=datetime(2026,10,11,12,tzinfo=timezone.utc)
+        rows=[]
+        for i in range(130):
+            job=self.j(); job['company']=f'Company {i:03d}'; job['posted']='2026-10-10'; rows.append(classify(job))
+        out=html_report(rows,[],{'max_html_jobs':1,'show_sources_status':False,'lookback_days':3},now,len(rows))
+        self.assertIn('Company 000',out)
+        self.assertIn('Company 129',out)
 
     def test_mail_orders_company_then_early_career_within_day(self):
         now=datetime(2026,10,11,12,tzinfo=timezone.utc)
@@ -160,6 +171,7 @@ class DigestTests(unittest.TestCase):
         self.assertLess(html_body.index('Software Engineer, New Grad 2026'),html_body.index('Backend Developer'))
         self.assertLess(second_amazon,html_body.index('Small Unknown'))
         self.assertLess(html_body.index('Small Unknown'),html_body.index('Another Unknown'))
+        self.assertLess(html_body.index('Big Tech / Fortune 500'),html_body.index('Other Companies'))
         self.assertEqual(company_priority('Google'),0)
         self.assertEqual(company_priority('Walmart Inc.'),1)
         self.assertEqual(company_priority('Small Unknown'),2)

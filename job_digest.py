@@ -467,6 +467,13 @@ def sort_by_posted(rows, today):
     ))
 
 
+def order_for_email(rows, today):
+    """Recognized employers first, then others; date and fit order each section."""
+    recognized=[row for row in rows if company_priority(row.get('company','')) < 2]
+    other=[row for row in rows if company_priority(row.get('company','')) == 2]
+    return sort_by_posted(recognized,today)+sort_by_posted(other,today)
+
+
 def write_workbook(filtered, all_jobs, source_status, cfg, today):
     path=OUT/'job_digest.xlsx'
     temp_handle=tempfile.NamedTemporaryFile(prefix='job_digest_',suffix='.xlsx',delete=False)
@@ -534,23 +541,26 @@ def write_workbook(filtered, all_jobs, source_status, cfg, today):
 
 
 def html_report(rows, source_status, cfg, today, all_count):
-    visible = sort_by_posted(rows,today)[:cfg['max_html_jobs']]
+    visible = order_for_email(rows,today)
     counts = Counter(row['fit'] for row in rows)
     s = ['<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:1000px;margin:auto;padding:10px">',
          f'<h2 style="margin:0 0 4px;color:#17365d">US Early-Career Tech Jobs — {html.escape(today.strftime("%d %b %Y"))}</h2>',
          f'<p style="margin:0 0 8px;font-size:12px;color:#555"><b>{all_count}</b> openings from {html.escape(cfg.get("window_label",f"the last {cfg["lookback_days"]} days"))} · {counts["Strong match"]} strong · {counts["Review"]} review · Full 14/28-day workbook attached.</p>']
-    if visible:
+    def append_table(label, group):
+        if not group:
+            return
+        s.append(f'<h3 style="margin:12px 0 5px;color:#17365d">{html.escape(label)} ({len(group)})</h3>')
         s.append('<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#17365d;color:#fff"><th align="center" style="padding:6px;text-align:center">Company</th><th align="center" style="padding:6px;text-align:center">Job Title</th><th align="center" style="padding:6px;text-align:center">Location</th><th align="center" style="padding:6px;text-align:center;white-space:nowrap">Posted</th><th align="center" style="padding:6px;text-align:center">Notes</th><th align="center" style="padding:6px;text-align:center">Apply</th></tr></thead><tbody>')
-        for r in visible:
+        for r in group:
             company=html.escape(r['company']); title=html.escape(r['title']); url=html.escape(r['url'],quote=True)
             posted=date_parse(r.get('posted'),today)
             posted_text=posted.strftime('%d %b') if posted else 'Unknown'
             s.append(f'<tr style="border-bottom:1px solid #e5e7eb"><td style="padding:5px"><b>{company}</b></td><td style="padding:5px">{title}</td><td style="padding:5px">{html.escape(r["location"])}</td><td style="padding:5px;white-space:nowrap">{html.escape(posted_text)}</td><td style="padding:5px">{html.escape(compact_note(r))}</td><td align="right" style="padding:5px"><a href="{url}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:5px 9px;border-radius:4px;font-weight:bold">Apply</a></td></tr>')
         s.append('</tbody></table>')
+    append_table('Big Tech / Fortune 500',[row for row in visible if company_priority(row.get('company','')) < 2])
+    append_table('Other Companies',[row for row in visible if company_priority(row.get('company','')) == 2])
     if not rows:
         s.append(f'<p>No matching openings with a usable posting date were found in the last {cfg["lookback_days"]} days.</p>')
-    if len(rows)>len(visible):
-        s.append(f'<p style="font-size:12px"><b>{len(rows)-len(visible)} more openings</b> are in the attached workbook.</p>')
     if cfg.get('show_sources_status'):
         failed=[x for x in source_status if x['error']]
         ok=[x for x in source_status if not x['error']]
@@ -573,20 +583,21 @@ def rows_within_days(rows, today, days):
     return selected
 
 
-def rows_from_previous_day(rows, today):
-    """Return postings from yesterday's calendar date only."""
-    target=(today-timedelta(days=1)).date()
-    return [row for row in rows if (posted:=date_parse(row.get('posted'),today)) and posted.date() == target]
+def rows_from_previous_days(rows, today, days=3):
+    """Return postings from the complete calendar days before the run date."""
+    start=(today-timedelta(days=days)).date()
+    end=(today-timedelta(days=1)).date()
+    return [row for row in rows if (posted:=date_parse(row.get('posted'),today)) and start <= posted.date() <= end]
 
 
 def build_mail(rows, sources, cfg, today, sender, recipient, workbook_data):
-    recent=sort_by_posted(rows_from_previous_day(rows,today),today)
-    recent_cfg={**cfg,'lookback_days':1,'window_label':'the previous calendar day'}
+    recent=order_for_email(rows_from_previous_days(rows,today,3),today)
+    recent_cfg={**cfg,'lookback_days':3,'window_label':'the previous 3 complete calendar days'}
     mail=EmailMessage()
     mail['From']=sender
     mail['To']=recipient
     mail['Subject']=f'Daily Job Digest | {len(recent)} US tech openings | {today.strftime("%d %b")}'
-    mail.set_content("Daily early-career tech jobs digest. The message contains filtered roles posted on the previous calendar day only. Today's partial listings are excluded. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n"+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
+    mail.set_content("Daily early-career tech jobs digest. The message contains filtered roles posted during the previous three complete calendar days. Today's partial listings are excluded. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n"+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
     mail.add_alternative(html_report(recent,sources,recent_cfg,today,len(recent)),subtype='html')
     mail.add_attachment(workbook_data,maintype='application',subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename='job_digest.xlsx')
     return mail
