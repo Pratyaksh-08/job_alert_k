@@ -33,7 +33,29 @@ US_HINT = re.compile(r'(?i)\b(USA|U\.S\.|United States|America|Remote|California
 STATE_CODES = re.compile(r'(?i)(?:,|\s)(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)(?:\s|$|,|\/)')
 NON_US = re.compile(r'(?i)\b(India|Canada|United Kingdom|UK|London|Dublin|Ireland|Berlin|Germany|Singapore|Australia|Tokyo|Japan|Netherlands|France|China|Taiwan|Israel|Poland|Spain|Switzerland|Hong Kong)\b')
 BAY = re.compile(r'(?i)\b(San Francisco|San Jose|Santa Clara|Silicon Valley|Bay Area|Mountain View|Palo Alto|Sunnyvale|Redwood City|Menlo Park|San Mateo|Cupertino|Fremont|Oakland|Berkeley)\b')
-COMPANY_TIER = {'google','meta','amazon','microsoft','apple','nvidia','openai','anthropic','databricks','snowflake','stripe','adobe','salesforce','roblox','figma','notion','palantir','uber','airbnb','netflix','doordash','ramp','scale ai','tiktok','linkedin','oracle','paypal','coinbase','cloudflare','mongodb','datadog','rippling'}
+COMPANY_PRIORITY_DATA = json.loads((CONFIG/'company_priority.json').read_text())
+
+
+def normalized_company(value):
+    value=re.sub(r'[^a-z0-9]+',' ',str(value or '').casefold()).strip()
+    return re.sub(r'\s+(incorporated|inc|corporation|corp|company|co|llc|ltd|holdings|technologies|technology)$','',value).strip()
+
+
+COMPANY_ALIASES={normalized_company(k):normalized_company(v) for k,v in COMPANY_PRIORITY_DATA.get('aliases',{}).items()}
+POPULAR_COMPANIES={normalized_company(x) for x in COMPANY_PRIORITY_DATA['popular_tech']}
+FORTUNE_500_COMPANIES={normalized_company(x) for x in COMPANY_PRIORITY_DATA['fortune_500']}
+COMPANY_TIER=POPULAR_COMPANIES
+
+
+def company_priority(value):
+    """0=popular tech, 1=Fortune 500, 2=other."""
+    name=normalized_company(value)
+    name=COMPANY_ALIASES.get(name,name)
+    if name in POPULAR_COMPANIES:
+        return 0
+    if name in FORTUNE_500_COMPANIES:
+        return 1
+    return 2
 
 
 class Stripper(HTMLParser):
@@ -345,7 +367,7 @@ def classify(job):
     score = {'Strong match':100,'Review':65,'Stretch':35,'Eligibility warning':20}[fit]
     if BAY.search(job['location']):
         score += 8
-    if job['company'].strip().lower() in COMPANY_TIER:
+    if company_priority(job['company']) == 0:
         score += 5
     if visa == 'Sponsorship stated':
         score += 8
@@ -434,10 +456,12 @@ def compact_note(job):
 
 
 def sort_by_posted(rows, today):
-    """Newest postings first, with stable deterministic ordering within a date."""
+    """Date, recognized employer, then early-career match; all deterministic."""
     fallback=datetime(1970,1,1,tzinfo=timezone.utc)
     return sorted(rows,key=lambda row: (
-        -(date_parse(row.get('posted'),today) or fallback).timestamp(),
+        -(date_parse(row.get('posted'),today) or fallback).date().toordinal(),
+        company_priority(row.get('company','')),
+        0 if row.get('fit') == 'Strong match' else 1,
         row.get('company','').casefold(),
         row.get('title','').casefold(),
     ))
@@ -514,7 +538,7 @@ def html_report(rows, source_status, cfg, today, all_count):
     counts = Counter(row['fit'] for row in rows)
     s = ['<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:1000px;margin:auto;padding:10px">',
          f'<h2 style="margin:0 0 4px;color:#17365d">US Early-Career Tech Jobs — {html.escape(today.strftime("%d %b %Y"))}</h2>',
-         f'<p style="margin:0 0 8px;font-size:12px;color:#555"><b>{all_count}</b> openings from the last {cfg["lookback_days"]} days · {counts["Strong match"]} strong · {counts["Review"]} review · Full 14/28-day workbook attached.</p>']
+         f'<p style="margin:0 0 8px;font-size:12px;color:#555"><b>{all_count}</b> openings from {html.escape(cfg.get("window_label",f"the last {cfg["lookback_days"]} days"))} · {counts["Strong match"]} strong · {counts["Review"]} review · Full 14/28-day workbook attached.</p>']
     if visible:
         s.append('<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#17365d;color:#fff"><th align="center" style="padding:6px;text-align:center">Company</th><th align="center" style="padding:6px;text-align:center">Job Title</th><th align="center" style="padding:6px;text-align:center">Location</th><th align="center" style="padding:6px;text-align:center;white-space:nowrap">Posted</th><th align="center" style="padding:6px;text-align:center">Notes</th><th align="center" style="padding:6px;text-align:center">Apply</th></tr></thead><tbody>')
         for r in visible:
@@ -538,18 +562,25 @@ def html_report(rows, source_status, cfg, today, all_count):
 
 
 def rows_within_days(rows, today, days):
-    cutoff=today-timedelta(days=days)
-    return [row for row in rows if (date_parse(row.get('posted'),today) or datetime(1970,1,1,tzinfo=timezone.utc)) >= cutoff]
+    """Include today and `days` complete preceding calendar dates."""
+    cutoff=(today-timedelta(days=days)).date()
+    end=today.date()
+    selected=[]
+    for row in rows:
+        posted=date_parse(row.get('posted'),today)
+        if posted and cutoff <= posted.date() <= end:
+            selected.append(row)
+    return selected
 
 
 def build_mail(rows, sources, cfg, today, sender, recipient, workbook_data):
     recent=sort_by_posted(rows_within_days(rows,today,3),today)
-    recent_cfg={**cfg,'lookback_days':3}
+    recent_cfg={**cfg,'lookback_days':3,'window_label':'today and the previous 3 days'}
     mail=EmailMessage()
     mail['From']=sender
     mail['To']=recipient
     mail['Subject']=f'Daily Job Digest | {len(recent)} US tech openings | {today.strftime("%d %b")}'
-    mail.set_content('Daily early-career tech jobs digest. The message contains filtered roles from the last three days. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n'+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
+    mail.set_content('Daily early-career tech jobs digest. The message contains filtered roles posted today or during the previous three calendar days. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n'+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
     mail.add_alternative(html_report(recent,sources,recent_cfg,today,len(recent)),subtype='html')
     mail.add_attachment(workbook_data,maintype='application',subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename='job_digest.xlsx')
     return mail

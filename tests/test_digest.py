@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from job_digest import normalize, parse_markdown, classify, job_key, eligible, exclusion_reasons, rows_within_days, build_mail, date_parse, iter_records, csv_bytes, html_report
+from job_digest import normalize, parse_markdown, classify, job_key, eligible, exclusion_reasons, rows_within_days, build_mail, date_parse, iter_records, csv_bytes, html_report, company_priority
 
 class DigestTests(unittest.TestCase):
     def j(self,**kwargs):
@@ -102,6 +102,13 @@ class DigestTests(unittest.TestCase):
         old=self.j(); old['posted']='4d'
         self.assertEqual(rows_within_days([recent,old],now,3),[recent])
 
+    def test_email_window_includes_full_third_previous_day(self):
+        now=datetime(2026,10,11,16,tzinfo=timezone.utc)
+        third_day=self.j(); third_day['posted']='2026-10-08T00:01:00Z'
+        fourth_day=self.j(); fourth_day['posted']='2026-10-07T23:59:00Z'
+        tomorrow=self.j(); tomorrow['posted']='2026-10-12T00:01:00Z'
+        self.assertEqual(rows_within_days([third_day,fourth_day,tomorrow],now,3),[third_day])
+
     def test_mail_contains_three_day_body_and_workbook(self):
         now=datetime(2026,10,11,12,tzinfo=timezone.utc)
         recent=classify(self.j()); recent['posted']='2d'
@@ -117,6 +124,7 @@ class DigestTests(unittest.TestCase):
         self.assertNotIn('>Visa</th>',html_body)
         self.assertIn('>Apply</a>',html_body)
         self.assertIn('Early-career match',html_body)
+        self.assertIn('today and the previous 3 days',html_body)
         self.assertEqual(html_body.count('align="center"'),6)
         attachments=list(mail.iter_attachments())
         self.assertEqual(len(attachments),1)
@@ -130,6 +138,26 @@ class DigestTests(unittest.TestCase):
         mail=build_mail([older,newest],[],cfg,now,'sender@example.com','to@example.com',b'xlsx')
         html_body=mail.get_body(preferencelist=('html',)).get_content()
         self.assertLess(html_body.index('Newest Co'),html_body.index('Older Co'))
+
+    def test_mail_orders_company_then_early_career_within_day(self):
+        now=datetime(2026,10,11,12,tzinfo=timezone.utc)
+        unknown_strong=self.j(); unknown_strong['company']='Small Unknown'; unknown_strong=classify(unknown_strong)
+        amazon_review=self.j(); amazon_review['company']='Amazon'; amazon_review['title']='Backend Developer'; amazon_review=classify(amazon_review)
+        amazon_strong=self.j(); amazon_strong['company']='Amazon'; amazon_strong=classify(amazon_strong)
+        unknown_review=self.j(); unknown_review['company']='Another Unknown'; unknown_review['title']='Software Engineer'; unknown_review=classify(unknown_review)
+        for job in (unknown_strong,amazon_review,amazon_strong,unknown_review): job['posted']='2026-10-11'
+        cfg={'lookback_days':14,'max_html_jobs':125,'show_sources_status':False}
+        mail=build_mail([unknown_review,unknown_strong,amazon_review,amazon_strong],[],cfg,now,'sender@example.com','to@example.com',b'xlsx')
+        html_body=mail.get_body(preferencelist=('html',)).get_content()
+        first_amazon=html_body.index('Amazon')
+        second_amazon=html_body.index('Amazon',first_amazon+1)
+        self.assertLess(first_amazon,second_amazon)
+        self.assertLess(html_body.index('Software Engineer, New Grad 2026'),html_body.index('Backend Developer'))
+        self.assertLess(second_amazon,html_body.index('Small Unknown'))
+        self.assertLess(html_body.index('Small Unknown'),html_body.index('Another Unknown'))
+        self.assertEqual(company_priority('Google'),0)
+        self.assertEqual(company_priority('Walmart Inc.'),1)
+        self.assertEqual(company_priority('Small Unknown'),2)
 
     def test_render_safe(self):
         j=classify(self.j())

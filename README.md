@@ -1,6 +1,6 @@
 # Daily US Early-Career Tech Jobs Digest
 
-A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Data Engineering and Data Science** openings suitable for early-career and graduate candidates. Each daily run emails filtered roles from the last three days and attaches a two-sheet Excel workbook.
+A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Data Engineering and Data Science** openings suitable for early-career and graduate candidates. Each daily run emails filtered roles from today plus the previous three complete calendar days and attaches a two-sheet Excel workbook.
 
 ## Quick setup
 
@@ -20,7 +20,7 @@ A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Dat
 - The `Filtered 14 Days` sheet is deduplicated and applies the approved hard exclusions: nontechnical/student roles, explicit non-US locations, no sponsorship or citizenship restrictions, 2+ years required experience, PhD-only roles, active-clearance requirements, and invalid/out-of-window dates. Seniority words alone do not exclude a role.
 - The `All Ingested 28 Days` sheet keeps every valid dated source record from the last 28 days without business filtering or deduplication. It records whether and why each row was excluded from the filtered sheet.
 - Both sheets include source provenance, including a GitHub repository link when the source is hosted on GitHub.
-- Puts filtered jobs posted within the last three days in a compact email table with separate company and job-title columns, posting date, short notes, and a right-aligned Apply button.
+- Puts filtered jobs posted today or during the previous three complete calendar days in a compact email table with separate company and job-title columns, posting date, short notes, and a right-aligned Apply button. Email rows sort by posting day (newest first), then popular-tech/Fortune-500 company priority, then early-career match.
 - Attaches `job_digest.xlsx` and also uploads it as a GitHub Actions artifact retained for 14 days.
 
 ## Enable daily email
@@ -44,6 +44,8 @@ Edit `config/settings.json`:
 | `max_html_jobs` | Maximum number of last-three-day jobs shown in the HTML email body |
 
 Edit `config/sources.json` to add or remove feeds.
+
+Edit `config/company_priority.json` to maintain the popular-technology employer tier, company aliases, and the Fortune 500 reference catalog used for within-day email ordering. The catalog records its reference year and sources so annual updates are auditable.
 
 Supported types:
 - `json`: use a public raw GitHub JSON URL with nested lists of job postings.
