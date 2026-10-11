@@ -1,13 +1,13 @@
 # Daily US Early-Career Tech Jobs Digest
 
-A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Data Engineering and Data Science** openings suitable for early-career and graduate candidates. Each daily run emails filtered roles from today plus the previous three complete calendar days and attaches a two-sheet Excel workbook.
+A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Data Engineering and Data Science** openings suitable for early-career and graduate candidates. Each daily run emails filtered roles from the previous calendar day only and attaches a two-sheet Excel workbook.
 
 ## Quick setup
 
 1. Push this folder to the repository's default branch, including `.github/workflows/daily_jobs.yml`.
 2. Add the three Actions secrets documented under **Enable daily email** below.
 3. Open **Actions → Daily Job Digest Email → Run workflow** and confirm that the email and workbook arrive.
-4. The workflow then runs automatically at **9:00 AM San Francisco time every day**, following US daylight-saving changes. GitHub schedule jobs can be delayed and are not hard real-time.
+4. The workflow then runs automatically at **8:00 AM San Francisco time every day**, following US daylight-saving changes. GitHub schedule jobs can be delayed and are not hard real-time.
 
 ## What it does
 
@@ -20,7 +20,7 @@ A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Dat
 - The `Filtered 14 Days` sheet is deduplicated and applies the approved hard exclusions: nontechnical/student roles, explicit non-US locations, no sponsorship or citizenship restrictions, 2+ years required experience, PhD-only roles, active-clearance requirements, and invalid/out-of-window dates. Seniority words alone do not exclude a role.
 - The `All Ingested 28 Days` sheet keeps every valid dated source record from the last 28 days without business filtering or deduplication. It records whether and why each row was excluded from the filtered sheet.
 - Both sheets include source provenance, including a GitHub repository link when the source is hosted on GitHub.
-- Puts filtered jobs posted today or during the previous three complete calendar days in a compact email table with separate company and job-title columns, posting date, short notes, and a right-aligned Apply button. Email rows sort by posting day (newest first), then popular-tech/Fortune-500 company priority, then early-career match.
+- Puts filtered jobs from the previous calendar day only in a compact email table with separate company and job-title columns, posting date, short notes, and a right-aligned Apply button. Listings from the run date are excluded from the email. Rows sort by popular-tech/Fortune-500 company priority, then early-career match.
 - Attaches `job_digest.xlsx` and also uploads it as a GitHub Actions artifact retained for 14 days.
 
 ## Enable daily email

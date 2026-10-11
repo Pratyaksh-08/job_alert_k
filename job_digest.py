@@ -573,14 +573,20 @@ def rows_within_days(rows, today, days):
     return selected
 
 
+def rows_from_previous_day(rows, today):
+    """Return postings from yesterday's calendar date only."""
+    target=(today-timedelta(days=1)).date()
+    return [row for row in rows if (posted:=date_parse(row.get('posted'),today)) and posted.date() == target]
+
+
 def build_mail(rows, sources, cfg, today, sender, recipient, workbook_data):
-    recent=sort_by_posted(rows_within_days(rows,today,3),today)
-    recent_cfg={**cfg,'lookback_days':3,'window_label':'today and the previous 3 days'}
+    recent=sort_by_posted(rows_from_previous_day(rows,today),today)
+    recent_cfg={**cfg,'lookback_days':1,'window_label':'the previous calendar day'}
     mail=EmailMessage()
     mail['From']=sender
     mail['To']=recipient
     mail['Subject']=f'Daily Job Digest | {len(recent)} US tech openings | {today.strftime("%d %b")}'
-    mail.set_content('Daily early-career tech jobs digest. The message contains filtered roles posted today or during the previous three calendar days. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n'+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
+    mail.set_content("Daily early-career tech jobs digest. The message contains filtered roles posted on the previous calendar day only. Today's partial listings are excluded. The attached Excel workbook contains the filtered 14-day list and all ingested records from the last 28 days.\n\n"+ '\n'.join(f'{r["company"]} - {r["title"]} - {r["fit"]}: {r["url"]}' for r in recent[:30]))
     mail.add_alternative(html_report(recent,sources,recent_cfg,today,len(recent)),subtype='html')
     mail.add_attachment(workbook_data,maintype='application',subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename='job_digest.xlsx')
     return mail

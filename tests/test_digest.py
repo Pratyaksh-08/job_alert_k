@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from job_digest import normalize, parse_markdown, classify, job_key, eligible, exclusion_reasons, rows_within_days, build_mail, date_parse, iter_records, csv_bytes, html_report, company_priority
+from job_digest import normalize, parse_markdown, classify, job_key, eligible, exclusion_reasons, rows_within_days, rows_from_previous_day, sort_by_posted, build_mail, date_parse, iter_records, csv_bytes, html_report, company_priority
 
 class DigestTests(unittest.TestCase):
     def j(self,**kwargs):
@@ -109,9 +109,17 @@ class DigestTests(unittest.TestCase):
         tomorrow=self.j(); tomorrow['posted']='2026-10-12T00:01:00Z'
         self.assertEqual(rows_within_days([third_day,fourth_day,tomorrow],now,3),[third_day])
 
+    def test_email_uses_previous_calendar_day_only(self):
+        now=datetime(2026,10,11,15,tzinfo=timezone.utc)
+        today=self.j(); today['posted']='2026-10-11T01:00:00Z'
+        yesterday_early=self.j(); yesterday_early['posted']='2026-10-10T00:01:00Z'
+        yesterday_late=self.j(); yesterday_late['posted']='2026-10-10T23:59:00Z'
+        older=self.j(); older['posted']='2026-10-09T23:59:00Z'
+        self.assertEqual(rows_from_previous_day([today,yesterday_early,yesterday_late,older],now),[yesterday_early,yesterday_late])
+
     def test_mail_contains_three_day_body_and_workbook(self):
         now=datetime(2026,10,11,12,tzinfo=timezone.utc)
-        recent=classify(self.j()); recent['posted']='2d'
+        recent=classify(self.j()); recent['posted']='1d'
         old=classify(self.j()); old['posted']='4d'
         cfg={'lookback_days':14,'max_html_jobs':125,'show_sources_status':True}
         health=[{'name':'fixture','count':2,'error':''}]
@@ -124,7 +132,7 @@ class DigestTests(unittest.TestCase):
         self.assertNotIn('>Visa</th>',html_body)
         self.assertIn('>Apply</a>',html_body)
         self.assertIn('Early-career match',html_body)
-        self.assertIn('today and the previous 3 days',html_body)
+        self.assertIn('the previous calendar day',html_body)
         self.assertEqual(html_body.count('align="center"'),6)
         attachments=list(mail.iter_attachments())
         self.assertEqual(len(attachments),1)
@@ -134,10 +142,7 @@ class DigestTests(unittest.TestCase):
         now=datetime(2026,10,11,12,tzinfo=timezone.utc)
         older=self.j(); older['company']='Older Co'; older['posted']='2d'; older=classify(older)
         newest=self.j(); newest['company']='Newest Co'; newest['posted']='1h'; newest=classify(newest)
-        cfg={'lookback_days':14,'max_html_jobs':125,'show_sources_status':False}
-        mail=build_mail([older,newest],[],cfg,now,'sender@example.com','to@example.com',b'xlsx')
-        html_body=mail.get_body(preferencelist=('html',)).get_content()
-        self.assertLess(html_body.index('Newest Co'),html_body.index('Older Co'))
+        self.assertEqual(sort_by_posted([older,newest],now),[newest,older])
 
     def test_mail_orders_company_then_early_career_within_day(self):
         now=datetime(2026,10,11,12,tzinfo=timezone.utc)
@@ -145,7 +150,7 @@ class DigestTests(unittest.TestCase):
         amazon_review=self.j(); amazon_review['company']='Amazon'; amazon_review['title']='Backend Developer'; amazon_review=classify(amazon_review)
         amazon_strong=self.j(); amazon_strong['company']='Amazon'; amazon_strong=classify(amazon_strong)
         unknown_review=self.j(); unknown_review['company']='Another Unknown'; unknown_review['title']='Software Engineer'; unknown_review=classify(unknown_review)
-        for job in (unknown_strong,amazon_review,amazon_strong,unknown_review): job['posted']='2026-10-11'
+        for job in (unknown_strong,amazon_review,amazon_strong,unknown_review): job['posted']='2026-10-10'
         cfg={'lookback_days':14,'max_html_jobs':125,'show_sources_status':False}
         mail=build_mail([unknown_review,unknown_strong,amazon_review,amazon_strong],[],cfg,now,'sender@example.com','to@example.com',b'xlsx')
         html_body=mail.get_body(preferencelist=('html',)).get_content()
