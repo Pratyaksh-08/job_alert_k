@@ -117,9 +117,19 @@ class DigestTests(unittest.TestCase):
         self.assertNotIn('>Visa</th>',html_body)
         self.assertIn('>Apply</a>',html_body)
         self.assertIn('Early-career match',html_body)
+        self.assertEqual(html_body.count('align="center"'),6)
         attachments=list(mail.iter_attachments())
         self.assertEqual(len(attachments),1)
         self.assertEqual(attachments[0].get_filename(),'job_digest.xlsx')
+
+    def test_mail_body_sorts_newest_posting_first(self):
+        now=datetime(2026,10,11,12,tzinfo=timezone.utc)
+        older=self.j(); older['company']='Older Co'; older['posted']='2d'; older=classify(older)
+        newest=self.j(); newest['company']='Newest Co'; newest['posted']='1h'; newest=classify(newest)
+        cfg={'lookback_days':14,'max_html_jobs':125,'show_sources_status':False}
+        mail=build_mail([older,newest],[],cfg,now,'sender@example.com','to@example.com',b'xlsx')
+        html_body=mail.get_body(preferencelist=('html',)).get_content()
+        self.assertLess(html_body.index('Newest Co'),html_body.index('Older Co'))
 
     def test_render_safe(self):
         j=classify(self.j())

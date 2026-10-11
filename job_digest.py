@@ -433,6 +433,16 @@ def compact_note(job):
     return 'Check eligibility'
 
 
+def sort_by_posted(rows, today):
+    """Newest postings first, with stable deterministic ordering within a date."""
+    fallback=datetime(1970,1,1,tzinfo=timezone.utc)
+    return sorted(rows,key=lambda row: (
+        -(date_parse(row.get('posted'),today) or fallback).timestamp(),
+        row.get('company','').casefold(),
+        row.get('title','').casefold(),
+    ))
+
+
 def write_workbook(filtered, all_jobs, source_status, cfg, today):
     path=OUT/'job_digest.xlsx'
     temp_handle=tempfile.NamedTemporaryFile(prefix='job_digest_',suffix='.xlsx',delete=False)
@@ -500,13 +510,13 @@ def write_workbook(filtered, all_jobs, source_status, cfg, today):
 
 
 def html_report(rows, source_status, cfg, today, all_count):
-    visible = rows[:cfg['max_html_jobs']]
+    visible = sort_by_posted(rows,today)[:cfg['max_html_jobs']]
     counts = Counter(row['fit'] for row in rows)
     s = ['<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:1000px;margin:auto;padding:10px">',
          f'<h2 style="margin:0 0 4px;color:#17365d">US Early-Career Tech Jobs — {html.escape(today.strftime("%d %b %Y"))}</h2>',
          f'<p style="margin:0 0 8px;font-size:12px;color:#555"><b>{all_count}</b> openings from the last {cfg["lookback_days"]} days · {counts["Strong match"]} strong · {counts["Review"]} review · Full 14/28-day workbook attached.</p>']
     if visible:
-        s.append('<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#17365d;color:#fff"><th align="left" style="padding:6px">Company</th><th align="left" style="padding:6px">Job Title</th><th align="left" style="padding:6px">Location</th><th align="left" style="padding:6px;white-space:nowrap">Posted</th><th align="left" style="padding:6px">Notes</th><th align="right" style="padding:6px">Apply</th></tr></thead><tbody>')
+        s.append('<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#17365d;color:#fff"><th align="center" style="padding:6px;text-align:center">Company</th><th align="center" style="padding:6px;text-align:center">Job Title</th><th align="center" style="padding:6px;text-align:center">Location</th><th align="center" style="padding:6px;text-align:center;white-space:nowrap">Posted</th><th align="center" style="padding:6px;text-align:center">Notes</th><th align="center" style="padding:6px;text-align:center">Apply</th></tr></thead><tbody>')
         for r in visible:
             company=html.escape(r['company']); title=html.escape(r['title']); url=html.escape(r['url'],quote=True)
             posted=date_parse(r.get('posted'),today)
@@ -533,7 +543,7 @@ def rows_within_days(rows, today, days):
 
 
 def build_mail(rows, sources, cfg, today, sender, recipient, workbook_data):
-    recent=rows_within_days(rows,today,3)
+    recent=sort_by_posted(rows_within_days(rows,today,3),today)
     recent_cfg={**cfg,'lookback_days':3}
     mail=EmailMessage()
     mail['From']=sender
