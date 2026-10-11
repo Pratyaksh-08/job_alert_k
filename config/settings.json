@@ -1,0 +1,12 @@
+{
+  "graduate_year": 2026,
+  "location": "US",
+  "preferred_region": "Bay Area",
+  "first_run_lookback_days": 21,
+  "first_run_undated_limit": 75,
+  "max_post_age_days": 120,
+  "max_html_jobs": 125,
+  "max_very_senior_yoe": 6,
+  "always_email_even_when_zero_new": true,
+  "show_sources_status": true
+}
