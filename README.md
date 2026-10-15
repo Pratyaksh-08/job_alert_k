@@ -2,12 +2,11 @@
 
 A deterministic GitHub Actions workflow for discovering **US SWE/SDE, AI/ML, Data Engineering and Data Science** openings suitable for early-career and graduate candidates. Each daily run emails filtered roles from the previous three complete calendar days and attaches a two-sheet Excel workbook.
 
-## Quick setup
+## Start here
 
-1. Push this folder to the repository's default branch, including `.github/workflows/daily_jobs.yml`.
-2. Add the three Actions secrets documented under **Enable daily email** below.
-3. Open **Actions → Daily Job Digest Email → Run workflow** and confirm that the email and workbook arrive.
-4. The workflow then runs automatically at **8:00 AM San Francisco time every day**, following US daylight-saving changes. GitHub schedule jobs can be delayed and are not hard real-time.
+If you received this repository from a friend, follow [FRIEND_SETUP.md](FRIEND_SETUP.md). The short version is: fork the repository, add three GitHub Actions secrets, enable Actions, and run the workflow manually once.
+
+The workflow runs automatically at **1:00 AM San Francisco time every day**, following US daylight-saving changes. GitHub scheduled jobs can be delayed and are not hard real-time.
 
 ## What it does
 
@@ -32,6 +31,22 @@ This workflow uses Gmail SMTP. In the GitHub repository, open **Settings → Sec
 - `EMAIL_TO`: one recipient email address, or multiple addresses separated by commas.
 
 The workflow only needs read permission to repository contents. After adding the secrets, run it manually once from the **Actions** tab and verify the received email before relying on the daily schedule.
+
+## Safe public sharing
+
+The repository is designed to keep credentials outside Git:
+
+- Gmail credentials and recipients are read only from GitHub Actions secrets.
+- `.env`, generated workbooks, CSV files, caches, and macOS metadata are ignored.
+- Do not commit resumes, addresses, phone numbers, immigration documents, application answers, app passwords, or generated email files.
+- Before making a fork public, inspect its full Git history as well as the current files. Deleting a secret in a later commit does not remove it from earlier commits.
+- If a credential is ever committed, revoke or rotate it immediately before rewriting history.
+- Actions logs are visible to readers of a public repository. Avoid adding debug output that prints environment variables or email contents.
+- Workflow artifacts contain collected job data. They do not intentionally contain credentials or resumes, but repository collaborators may be able to access them.
+
+This project reads public community feeds and employer ATS endpoints. Their schemas, availability, licenses, and terms may change. Preserve source attribution and review upstream terms before redistributing source data. The Fortune name and rankings belong to their respective owner; this project is not affiliated with or endorsed by Fortune or any listed employer.
+
+No software license is currently included. A public repository can be viewed, but reuse rights are not automatically granted. Add a license deliberately before inviting broad reuse or contributions.
 
 ## Customize
 
@@ -59,6 +74,7 @@ Supported types:
 - No automatic application submission and no resume/PII should be stored in this repository.
 - GitHub's free private-runner allowance is currently 2,000 minutes/month on Free accounts; review current GitHub billing. GitHub-hosted runner time is charged by minutes, not number of postings. External email/ATS rate limits are separate.
 - The sources and workbook have been validated with live crawls, but upstream schemas can still change. Run the workflow manually and inspect the Actions log before relying on the schedule.
+- This is a personal job-discovery aid, not legal, immigration, recruiting, or employment advice. Verify every posting and eligibility requirement on the employer's official page.
 
 ## Local testing
 
